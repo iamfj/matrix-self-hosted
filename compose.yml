@@ -1,0 +1,95 @@
+services:
+  postgres:
+    image: postgres:${POSTGRES_VERSION:-18}
+    restart: unless-stopped
+    container_name: postgres
+    hostname: postgres
+    environment:
+      POSTGRES_USER: synapse
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: synapse
+      PGDATA: /var/lib/postgresql/${POSTGRES_VERSION:-18}/docker
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/${POSTGRES_VERSION:-18}/docker
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synapse"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - shared_network
+
+  synapse:
+    image: matrixdotorg/synapse:${SYNAPSE_VERSION:-latest}
+    restart: unless-stopped
+    container_name: synapse
+    hostname: synapse
+    environment:
+      SYNAPSE_SERVER_NAME: "${SUBDOMAIN}.${DOMAIN_NAME}"
+      SYNAPSE_REPORT_STATS: "no"
+      SYNAPSE_CONFIG_DIR: "/data"
+      SYNAPSE_DATA_DIR: "/data"
+    volumes:
+      - ./data/synapse:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8008/_matrix/client/versions"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - shared_network
+
+  synapse-admin:
+    image: awesometechnologies/synapse-admin:latest
+    restart: unless-stopped
+    container_name: synapse-admin
+    hostname: synapse-admin
+    networks:
+      - shared_network
+    volumes:
+      - ./data/synapse-admin/config.json:/app/config.json:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  caddy:
+    image: caddy:${CADDY_VERSION:-latest}
+    restart: unless-stopped
+    container_name: caddy
+    hostname: caddy
+    environment:
+      DOMAIN_NAME: ${DOMAIN_NAME}
+      SUBDOMAIN: ${SUBDOMAIN}
+      SSL_EMAIL: ${SSL_EMAIL}
+    depends_on:
+      synapse:
+        condition: service_healthy
+      synapse-admin:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://127.0.0.1:2019/metrics"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - shared_network
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    volumes:
+      - ./config/Caddyfile:/etc/caddy/Caddyfile
+      - ./data/caddy:/data
+
+networks:
+  shared_network:
+    name: shared_network
+    driver: bridge
+    external: true

@@ -1,0 +1,33 @@
+# Email for SSL Let's Encrypt.
+{
+	email {$SSL_EMAIL}
+	log {
+		level WARN
+		format console
+	}
+}
+
+# Matrix service.
+{$SUBDOMAIN}.{$DOMAIN_NAME} {
+	# Prevents search engines from indexing this site.
+	header X-Robots-Tag "noindex, nofollow"
+
+	# Automatisches HTTPS wird von Caddy standardmäßig für dich erledigt.
+
+    # .well-known Discovery für Client- und Server-Federation
+    # Dies ist entscheidend, damit andere Server und Clients
+    # deine Instanz finden können.
+    handle /.well-known/matrix/* {
+        header Content-Type application/json
+        respond `{"m.server": "{$SUBDOMAIN}.{$DOMAIN_NAME}:443"}` 200
+    }
+
+    # Leite den gesamten restlichen Traffic an den Synapse-Container weiter.
+    reverse_proxy synapse:8008
+}
+
+# Synapse Admin UI
+admin.{$SUBDOMAIN}.{$DOMAIN_NAME} {
+    header X-Robots-Tag "noindex, nofollow"
+    reverse_proxy synapse-admin:80
+}
