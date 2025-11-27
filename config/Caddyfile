@@ -31,3 +31,15 @@ admin.{$SUBDOMAIN}.{$DOMAIN_NAME} {
     header X-Robots-Tag "noindex, nofollow"
     reverse_proxy synapse-admin:80
 }
+
+# Hookshot Webhooks
+webhooks.{$SUBDOMAIN}.{$DOMAIN_NAME} {
+    header X-Robots-Tag "noindex, nofollow"
+    reverse_proxy hookshot:9000
+}
+
+# Hookshot Widgets
+widgets.{$SUBDOMAIN}.{$DOMAIN_NAME} {
+    header X-Robots-Tag "noindex, nofollow"
+    reverse_proxy hookshot:9002
+}

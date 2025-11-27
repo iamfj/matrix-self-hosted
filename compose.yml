@@ -1,4 +1,18 @@
 services:
+  valkey:
+    image: valkey/valkey:${VALKEY_VERSION:-latest}
+    restart: unless-stopped
+    container_name: valkey
+    hostname: valkey
+    networks:
+      - shared_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   postgres:
     image: postgres:${POSTGRES_VERSION:-18}
     restart: unless-stopped
@@ -31,6 +45,7 @@ services:
       SYNAPSE_DATA_DIR: "/data"
     volumes:
       - ./data/synapse:/data
+      - ./data/hookshot:/data/hookshot
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8008/_matrix/client/versions"]
       interval: 15s
@@ -58,6 +73,21 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+
+  hookshot:
+    image: halfshot/matrix-hookshot:latest
+    restart: unless-stopped
+    container_name: hookshot
+    hostname: hookshot
+    networks:
+      - shared_network
+    volumes:
+      - ./data/hookshot:/data
+    depends_on:
+      valkey:
+        condition: service_healthy
+      synapse:
+        condition: service_healthy
 
   caddy:
     image: caddy:${CADDY_VERSION:-latest}

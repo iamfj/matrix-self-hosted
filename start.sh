@@ -18,17 +18,19 @@ echo "Creating shared network 'shared_network'..."
 echo "================================================================="
 if ! docker network inspect shared_network >/dev/null 2>&1; then
     docker network create shared_network
+    echo "Shared network 'shared_network' created."
 else
     echo "Shared network 'shared_network' already exists."
 fi
 echo ""
 
 echo "================================================================="
-echo "Generating new configuration..."
+echo "Setup Synapse..."
 echo "================================================================="
 if [ ! -f "data/synapse/homeserver.yaml" ]; then
-    echo "Synapse configuration not found."
+    echo "Synapse configuration not found. Generating new configuration..."
     docker compose run --rm -it --no-deps synapse generate
+    echo "Synapse configuration generated."
     NEW_CONFIG_GENERATED=true
 else
     echo "Synapse configuration already exists. Skipping configuration generation."
@@ -37,9 +39,7 @@ echo ""
 
 # Check database configuration
 if [ "$NEW_CONFIG_GENERATED" = true ] && grep -q "name: sqlite3" data/synapse/homeserver.yaml; then
-    echo "================================================================="
-    echo "Updating database configuration..."
-    echo "================================================================="
+    echo "Detected SQLite database configuration. Updating to PostgreSQL..."
     
     # Backup original config
     cp data/synapse/homeserver.yaml data/synapse/homeserver.yaml.bak
@@ -59,21 +59,6 @@ database:
     cp_max: 10
 EOF
 
-    # Remove the old database block (this is a simplified approach assuming standard block format)
-    # A more robust way is using yq or similar, but we'll try sed/awk or just replace the whole block if predictable.
-    # Since YAML structure varies, a simple replace for the default sqlite block is safest if we know what it looks like.
-    # Default usually looks like:
-    # database:
-    #   name: sqlite3
-    #   args:
-    #     database: /data/homeserver.db
-    
-    # We will read the file, look for the database block and replace it.
-    # However, without yq installed in the environment, text manipulation is risky.
-    # Let's try a python one-liner which is likely available or just append/replace known strings.
-    
-    # Let's stick to a safer replacement of the specific sqlite lines if they match the default generation.
-    
     sed -i.bak "/database:/,/database: \/data\/homeserver.db/c\\
 database:\\
   name: psycopg2\\
@@ -88,12 +73,14 @@ database:\\
 
     rm data/synapse/db_config.tmp
 
+    echo "Database configuration updated."
+    echo "Configuration backup saved to data/synapse/homeserver.yaml.bak"
     echo ""
 fi
 
 # Generate synapse-admin config
 echo "================================================================="
-echo "Generating synapse-admin configuration..."
+echo "Setup Synapse Admin..."
 echo "================================================================="
 mkdir -p data/synapse-admin
 cat > data/synapse-admin/config.json <<EOF
@@ -104,18 +91,100 @@ EOF
 echo "Synapse-admin configuration generated."
 echo ""
 
-# Start the containers
+# Hookshot Setup
 echo "================================================================="
-echo "Starting containers..."
+echo "Setup Hookshot..."
+echo "================================================================="
+
+# Generate config.yaml if missing
+if [ ! -f "data/hookshot/config.yaml" ]; then
+    mkdir -p data/hookshot
+    cat > data/hookshot/config.yaml <<EOF
+bridge:
+  domain: ${SUBDOMAIN}.${DOMAIN_NAME}
+  url: http://hookshot:9993
+  mediaUrl: https://${SUBDOMAIN}.${DOMAIN_NAME}
+  port: 9993
+  bindAddress: 0.0.0.0
+
+logging:
+  level: info
+  colorize: false
+  json: false
+  timestampFormat: HH:mm:ss:SSS
+
+cache:
+  redisUri: "redis://valkey:3679"
+
+homeserver:
+  url: http://synapse:8008
+  domain: ${SUBDOMAIN}.${DOMAIN_NAME}
+
+listeners:
+  - port: 9000
+    bindAddress: 0.0.0.0
+    resources:
+      - webhooks
+  - port: 9001
+    bindAddress: 127.0.0.1
+    resources:
+      - metrics
+  - port: 9002
+    bindAddress: 0.0.0.0
+    resources:
+      - widgets
+
+permissions:
+  - actor: ${SUBDOMAIN}.${DOMAIN_NAME}
+    services:
+      - service: "*"
+        level: admin
+
+widgets:
+  addToAdminRooms: false
+  disallowedIpRanges:
+    - 127.0.0.0/8
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 100.64.0.0/10
+    - 192.0.0.0/24
+    - 169.254.0.0/16
+    - 192.88.99.0/24
+    - 198.18.0.0/15
+    - 192.0.2.0/24
+    - 198.51.100.0/24
+    - 203.0.113.0/24
+    - 224.0.0.0/4
+    - ::1/128
+    - fe80::/10
+    - fc00::/7
+    - 2001:db8::/32
+    - ff00::/8
+    - fec0::/10
+  roomSetupWidget:
+    addOnInvite: false
+  publicUrl: https://${SUBDOMAIN}.${DOMAIN_NAME}/widgetapi/v1/static
+  branding:
+    widgetTitle: Hookshot Configuration
+EOF
+    echo "Hookshot config.yaml generated."
+else
+    echo "Hookshot config.yaml already exists. Skipping generation."
+fi
+
+echo ""
+
+# Start the stack
+echo "================================================================="
+echo "Starting stack..."
 echo "================================================================="
 docker compose up -d --wait
 echo ""
 
 ADMIN_PASSWORD=""
 if [ "$NEW_CONFIG_GENERATED" = true ]; then
-    echo "================================================================="
-    echo "Creating admin user..."
-    echo "================================================================="
+    echo "Detected fresh installation. Creating admin user..."
 
     # Generate a random password
     ADMIN_PASSWORD=$(openssl rand -base64 24)
@@ -123,13 +192,7 @@ if [ "$NEW_CONFIG_GENERATED" = true ]; then
     # Create the user
     # We remove -it since this is a script
     docker compose exec synapse register_new_matrix_user -u admin -p "$ADMIN_PASSWORD" --admin -c /data/homeserver.yaml http://localhost:8008
-    
-    if [ $? -eq 0 ]; then
-        echo "Admin user created successfully."
-    else
-        echo "Failed to create admin user."
-        ADMIN_PASSWORD=""
-    fi
+    echo "Admin user created successfully."
     echo ""
 fi
 
@@ -140,6 +203,7 @@ echo "================================================================="
 echo ""
 echo "Server URL: https://${SUBDOMAIN}.${DOMAIN_NAME}"
 echo "Admin UI:   https://admin.${SUBDOMAIN}.${DOMAIN_NAME}"
+echo "Hookshot:   https://hookshot.${SUBDOMAIN}.${DOMAIN_NAME}"
 echo ""
 echo "You can now connect to your server using a Matrix client like Element."
 echo "When asked for a homeserver, enter: https://${SUBDOMAIN}.${DOMAIN_NAME}"
